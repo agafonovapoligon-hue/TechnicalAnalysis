@@ -1,0 +1,149 @@
+---
+title: "Technical Analysis using R — Preliminary Stage"
+subtitle: "BDA400 Data Science Tools and Techniques · Assignment 2"
+author: "Viktoriia Agafonova"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.align = "center", fig.width = 9, fig.height = 5)
+source("R/ta_functions.R")
+library(knitr)
+```
+
+> **AI Assistance Declaration:** I used Claude (Anthropic, Claude Opus 5.5, Claude desktop app, 2026-11-18) for drafting the structure of the functions, this R Markdown layout and comments. I verified outputs by running and knitting the code in RStudio and checking the tables against the downloaded data. All final calculations are done by R. I am responsible for the accuracy and originality of this work.
+
+# Project configuration
+
+The portfolio is defined in **`portfolio.txt`** — one ticker symbol per line.
+
+```{r portfolio}
+portfolio_file <- "portfolio.txt"
+cat(readLines(portfolio_file), sep = "\n")
+symbols <- read_portfolio(portfolio_file)
+symbols
+```
+
+Analysis period (daily data from Yahoo Finance via `quantmod`):
+
+```{r config}
+start_date <- as.Date("2025-11-01")
+end_date   <- as.Date("2026-11-01")   # 'to' is exclusive in getSymbols()
+ma_windows <- c(20, 50)               # moving-average windows (trading days)
+```
+
+# Importing stock data
+
+`load_stock_data()` reads `portfolio.txt`, downloads the data for every symbol
+with `quantmod::getSymbols()` and returns **one data frame per symbol**
+(columns: Date, Open, High, Low, Close, Volume, Adjusted). With
+`assign_to_env = TRUE` it also creates a separate data frame named after each
+symbol (e.g. `AAPL`).
+
+```{r load-data}
+stocks <- load_stock_data(portfolio_file, from = start_date, to = end_date,
+                          assign_to_env = TRUE)
+vapply(stocks, nrow, integer(1))   # trading days loaded per symbol
+str(stocks[[1]])
+```
+
+# Computing statistics
+
+`calculate_statistics()` takes one stock's data frame and computes, on the
+**Close** price:
+
+- **Mean**, **median**, **standard deviation** (base R);
+- **Mode** — prices are continuous, so they are rounded to whole dollars
+  before counting the most frequent value (`get_mode()`);
+- **Simple moving averages** of `r ma_windows[1]` and `r ma_windows[2]` days (`TTR::SMA()`);
+- extra context: min, max, last close, mean daily return and daily volatility.
+
+Results are stored in a structured list: a one-row `summary` data frame and a
+`moving_averages` data frame for each stock. `calculate_all_statistics()`
+applies it to the whole portfolio.
+
+```{r statistics}
+results <- calculate_all_statistics(stocks, price_col = "Close", ma_windows = ma_windows)
+str(results$by_symbol[[1]], max.level = 1)
+```
+
+## Portfolio summary
+
+```{r summary-table}
+kable(results$summary_table[, c("Symbol", "Observations", "Mean", "Median", "Mode",
+                                "Std_Dev", "Min", "Max", "Last_Close",
+                                "Last_SMA_20", "Last_SMA_50")],
+      digits = 2, format.args = list(big.mark = ","),
+      col.names = c("Symbol", "Days", "Mean", "Median", "Mode", "Std. dev.",
+                    "Min", "Max", "Last close", "SMA 20", "SMA 50"),
+      caption = "Table 1. Close-price statistics by stock (USD)")
+```
+
+```{r risk-return}
+kable(results$summary_table[, c("Symbol", "Mean_Daily_Return_pct", "Volatility_pct")],
+      digits = 3,
+      col.names = c("Symbol", "Mean daily return (%)", "Daily volatility (%)"),
+      caption = "Table 2. Daily return and volatility")
+```
+
+# Displaying the data
+
+## Console-style display utilities
+
+The display functions are designed for the R console; here is their output for
+the first stock in the portfolio.
+
+```{r console-display}
+first <- names(stocks)[1]
+display_stock_data(stocks[[first]], first, n = 5)
+display_quote_summary(stocks[[first]], first)
+display_statistics(results$by_symbol[[first]], first)
+```
+
+## Portfolio overview
+
+```{r growth, fig.cap = "Figure 1. Growth of $100 invested at the start of the period"}
+plot_portfolio_growth(stocks)
+```
+
+## Stock-by-stock
+
+```{r per-stock, results = "asis", fig.height = 5.5}
+for (sym in names(stocks)) {
+  df    <- stocks[[sym]]
+  stats <- results$by_symbol[[sym]]
+
+  cat("\n\n### ", sym, "\n\n", sep = "")
+
+  cat("**Quote summary**\n\n")
+  print(kable(build_quote_summary(df), col.names = c("", "")))
+
+  cat("\n\n**Latest 5 trading days**\n\n")
+  print(kable(tail(df, 5), digits = 2, row.names = FALSE,
+              format.args = list(big.mark = ",")))
+
+  cat("\n\n**Statistics (Close price)**\n\n")
+  print(kable(statistics_table(stats)))
+
+  cat("\n\n")
+  plot_stock_chart(df, sym)
+  cat("\n\n")
+  print(plot_price_with_ma(stats, sym))
+  cat("\n\n")
+}
+```
+
+# Session information
+
+```{r session-info}
+sessionInfo()
+```
